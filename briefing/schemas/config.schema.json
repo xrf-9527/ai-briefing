@@ -105,6 +105,69 @@
           "type": "integer",
           "minimum": 1
         },
+        "dedup": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "fingerprint": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean", "default": true },
+                "bits": { "type": "integer", "minimum": 32, "maximum": 128, "default": 64 },
+                "bands": { "type": "integer", "minimum": 1, "maximum": 16, "default": 8 },
+                "ham_thresh": { "type": "integer", "minimum": 0, "maximum": 16, "default": 3 }
+              }
+            },
+            "semantic": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean", "default": true },
+                "threshold": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.92 },
+                "ann": { "type": "string", "enum": ["faiss", "numpy"], "default": "faiss" },
+                "merge_sources": { "type": "boolean", "default": true }
+              }
+            }
+          }
+        },
+        "clustering": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "algo": { "type": "string", "enum": ["hdbscan", "kmeans"], "default": "hdbscan" },
+            "min_cluster_size": { "type": "integer", "minimum": 2 },
+            "k": { "type": "integer", "minimum": 2, "default": 20 },
+            "attach_noise": { "type": "boolean", "default": true },
+            "labeler": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "mode": { "type": "string", "enum": ["none", "heuristic", "llm"], "default": "none" }
+              }
+            }
+          }
+        },
+        "rerank": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "strategy": { "type": "string", "enum": ["none", "ce", "mmr", "ce+mmr"], "default": "ce" },
+            "lambda": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.4 },
+            "model": { "type": "string" }
+          }
+        },
+        "packer": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "budget": { "type": "integer", "minimum": 100, "default": 6000 },
+            "per_cluster_min": { "type": "integer", "minimum": 0, "default": 300 },
+            "per_cluster_max": { "type": "integer", "minimum": 1, "default": 1200 }
+          }
+        },
         "min_cluster_size": {
           "type": "integer",
           "minimum": 2

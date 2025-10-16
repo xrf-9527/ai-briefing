@@ -1,5 +1,7 @@
+"""Briefing package.
 
-from .orchestrator import run_once as run
-from .summarizer import generate_summary as generate
+Avoid importing heavy submodules at package import time to prevent side-effects
+(like logger configuration and filesystem writes) during test collection.
+"""
 
-__all__ = ["run", "generate"]
+__all__: list[str] = []

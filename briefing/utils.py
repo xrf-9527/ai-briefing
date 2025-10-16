@@ -176,7 +176,8 @@ def _build_logger():
         return
 
     level = os.getenv("LOG_LEVEL", "INFO").upper()
-    log_dir = os.getenv("LOG_DIR", "/workspace/logs")
+    # Default to a local, writable logs directory
+    log_dir = os.getenv("LOG_DIR", "logs")
     json_mode = os.getenv("LOG_JSON", "false").lower() == "true"
 
     os.makedirs(log_dir, exist_ok=True)

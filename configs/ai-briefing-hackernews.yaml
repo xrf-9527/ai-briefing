@@ -11,6 +11,29 @@ processing:
   reranker_model: BAAI/bge-reranker-v2-m3
   initial_topk: 1000
   max_candidates_per_cluster: 300
+  dedup:
+    enabled: true
+    fingerprint:
+      enabled: true
+      bits: 64
+      bands: 8
+      ham_thresh: 3
+    semantic:
+      enabled: true
+      threshold: 0.92
+      merge_sources: true
+  clustering:
+    algo: hdbscan
+    min_cluster_size: 2
+    attach_noise: true
+  rerank:
+    strategy: ce+mmr
+    lambda: 0.4
+  packer:
+    enabled: true
+    budget: 6000
+    per_cluster_min: 300
+    per_cluster_max: 1200
   embedding:
     max_batch_tokens: 8192
     max_item_chars: 6000

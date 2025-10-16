@@ -14,6 +14,9 @@ import hdbscan
 from sentence_transformers import CrossEncoder
 
 from briefing.utils import now_utc, get_logger, parse_datetime_safe
+from briefing.stages.dedup import dedup_fingerprint, dedup_semantic
+from briefing.stages.clustering import cluster as stage_cluster
+from briefing.stages.rerank import rerank_candidates
 
 TEI_ORIGIN = os.getenv("TEI_ORIGIN", "http://tei:3000")
 LID_MODEL_PATH = os.getenv("LID_MODEL_PATH", "/workspace/lid.176.bin")
@@ -324,15 +327,13 @@ def _near_duplicate_mask(embs: np.ndarray, threshold: float) -> List[bool]:
     return keep
 
 def _cluster(embs: np.ndarray, min_cluster_size: int) -> np.ndarray:
+    # Kept for backward-compat and tests; prefer stage_cluster
     clusterer = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size, metric='euclidean')
     labels = clusterer.fit_predict(embs)
-    
     unique_labels = set(labels)
     n_clusters = len(unique_labels) - (1 if -1 in unique_labels else 0)
     n_noise = list(labels).count(-1)
-    
-    logger.info("Clustering complete: %d clusters found, %d noise points (min_size=%d)", 
-                n_clusters, n_noise, min_cluster_size)
+    logger.info("Clustering complete: %d clusters found, %d noise points (min_size=%d)", n_clusters, n_noise, min_cluster_size)
     return labels
 
 def _cluster_centrality(embs: np.ndarray, idxs: List[int]) -> Tuple[int, np.ndarray]:
@@ -350,9 +351,9 @@ def _top_k_by_centroid(embs: np.ndarray, idxs: List[int], k: int = 50) -> List[i
     return pick
 
 def _rerank(bge_model: str, query: str, candidates: List[str]) -> List[int]:
+    # Legacy CE rerank, retained for compatibility where strategy is implicitly CE
     st = time.monotonic()
     ce = CrossEncoder(bge_model)
-    # Ensure all candidates are clean strings
     clean_candidates = [_clean_text_for_embedding(c) for c in candidates]
     pairs = [[_clean_text_for_embedding(query), c] for c in clean_candidates]
     scores = ce.predict(pairs)
@@ -405,6 +406,20 @@ def run_processing_pipeline(raw_items: List[Dict[str, Any]], cfg: Dict[str, Any]
         logger.info("pipeline: no items after time_window filter")
         return []
 
+    # Optional: fingerprint dedup prior to embedding (controlled by processing.dedup.fingerprint)
+    dedup_cfg = cfg.get("dedup") or {}
+    fp_cfg = (dedup_cfg.get("fingerprint") or {}) if dedup_cfg.get("enabled") else {}
+    if dedup_cfg.get("enabled") and (fp_cfg.get("enabled", True)):
+        try:
+            filtered = dedup_fingerprint(
+                filtered,
+                bits=int(fp_cfg.get("bits", 64)),
+                bands=int(fp_cfg.get("bands", 8)),
+                ham_thresh=int(fp_cfg.get("ham_thresh", 3)),
+            )
+        except Exception as e:
+            logger.warning("fingerprint dedup failed, continuing without it: %s", e)
+
     # lid = fasttext.load_model(LID_MODEL_PATH)
     texts = [it["text"] for it in filtered]
     # for tx in texts:
@@ -422,15 +437,45 @@ def run_processing_pipeline(raw_items: List[Dict[str, Any]], cfg: Dict[str, Any]
         chars_per_token=chars_per_token,
     )
 
-    mask = _near_duplicate_mask(embs, cfg.get("sim_near_dup", 0.92))
-    filtered2 = [x for x, m in zip(filtered, mask) if m]
-    embs2 = embs[mask]
+    # Semantic deduplication (controlled by processing.dedup.semantic). Fallback to legacy mask.
+    use_legacy_near_dup = True
+    embs2 = embs
+    filtered2 = filtered
+    if dedup_cfg:
+        use_legacy_near_dup = False
+        sem_cfg = dedup_cfg.get("semantic") or {}
+        if dedup_cfg.get("enabled") and sem_cfg.get("enabled", True):
+            thr = float(sem_cfg.get("threshold", cfg.get("sim_near_dup", 0.92)))
+            try:
+                embs2, filtered2 = dedup_semantic(embs, filtered, threshold=thr, merge_sources=bool(sem_cfg.get("merge_sources", True)))
+            except Exception as e:
+                logger.warning("semantic dedup failed, falling back to legacy: %s", e)
+                use_legacy_near_dup = True
+        else:
+            # dedup section provided but semantic disabled -> keep all
+            embs2 = embs
+            filtered2 = filtered
+
+    if use_legacy_near_dup:
+        mask = _near_duplicate_mask(embs, cfg.get("sim_near_dup", 0.92))
+        filtered2 = [x for x, m in zip(filtered, mask) if m]
+        embs2 = embs[mask]
 
     if len(filtered2) == 0:
         logger.info("pipeline: all items removed by near-dup filter")
         return []
 
-    labels = _cluster(embs2, cfg.get("min_cluster_size", 3))
+    # Clustering (algo switchable under processing.clustering)
+    cl_cfg = cfg.get("clustering") or {}
+    algo = cl_cfg.get("algo", "hdbscan")
+    min_cs = int(cl_cfg.get("min_cluster_size", cfg.get("min_cluster_size", 3)))
+    k = int(cl_cfg.get("k", 20))
+    attach_noise = bool(cl_cfg.get("attach_noise", True))
+    try:
+        labels = stage_cluster(embs2, algo=algo, min_cluster_size=min_cs, k=k, attach_noise=attach_noise)
+    except Exception as e:
+        logger.warning("stage clustering failed (algo=%s), using legacy hdbscan: %s", algo, e)
+        labels = _cluster(embs2, cfg.get("min_cluster_size", 3))
     clusters: Dict[int, List[int]] = {}
     for i, lb in enumerate(labels):
         clusters.setdefault(lb, []).append(i)
@@ -438,15 +483,34 @@ def run_processing_pipeline(raw_items: List[Dict[str, Any]], cfg: Dict[str, Any]
     bundles: List[Dict[str, Any]] = []
     initial_topk = int(cfg.get("initial_topk", 1000))
     max_candidates = int(cfg.get("max_candidates_per_cluster", 300))
-    bge_model = cfg["reranker_model"]
+    # Reranking strategy
+    rerank_cfg = cfg.get("rerank") or {}
+    strategy = rerank_cfg.get("strategy", "ce")
+    bge_model = rerank_cfg.get("model") or cfg["reranker_model"]
+    mmr_lambda = float(rerank_cfg.get("lambda", 0.4))
 
     for lb, idxs in clusters.items():
         pick = _top_k_by_centroid(embs2, idxs, k=min(initial_topk, len(idxs)))
         pick = pick[:max_candidates]
-        best_idx, _ = _cluster_centrality(embs2, idxs)
+        best_idx, best_vec = _cluster_centrality(embs2, idxs)
         query_text = filtered2[best_idx]["text"]
         cand_texts = [filtered2[i]["text"] for i in pick]
-        order = _rerank(bge_model, query_text, cand_texts)
+        if strategy in ("none", "ce", "mmr", "ce+mmr"):
+            try:
+                order = rerank_candidates(
+                    query_text=query_text,
+                    candidate_texts=cand_texts,
+                    strategy=strategy,
+                    model_name=bge_model,
+                    cand_embs=embs2[pick],
+                    query_vec=best_vec,
+                    mmr_lambda=mmr_lambda,
+                )
+            except Exception as e:
+                logger.warning("rerank(strategy=%s) failed, falling back to CE: %s", strategy, e)
+                order = _rerank(bge_model, query_text, cand_texts)
+        else:
+            order = _rerank(bge_model, query_text, cand_texts)
         ordered_items = [filtered2[pick[i]] for i in order]
 
         bundles.append({

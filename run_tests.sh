@@ -6,7 +6,7 @@ echo "Running AI-Briefing tests..."
 echo "============================"
 
 # Run tests with coverage
-python -m pytest tests/ -v --cov=. --cov-report=term-missing
+python3 -m pytest tests/ -v --cov=. --cov-report=term-missing
 
 # Check exit code
 if [ $? -eq 0 ]; then
@@ -17,4 +17,3 @@ else
     echo "❌ Some tests failed. Please check the output above."
     exit 1
 fi
-

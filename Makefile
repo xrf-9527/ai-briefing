@@ -39,6 +39,71 @@ ifeq ($(NO_BRIEF_LITE),1)
 CLI_ARGS += --no-brief-lite
 endif
 
+# New processing flags via environment variables
+ifeq ($(DEDUP),1)
+CLI_ARGS += --dedup
+endif
+ifeq ($(NO_DEDUP),1)
+CLI_ARGS += --no-dedup
+endif
+ifdef DEDUP_THRESHOLD
+CLI_ARGS += --dedup-threshold $(DEDUP_THRESHOLD)
+endif
+ifeq ($(DEDUP_FP),1)
+CLI_ARGS += --dedup-fp
+endif
+ifeq ($(NO_DEDUP_FP),1)
+CLI_ARGS += --no-dedup-fp
+endif
+ifdef DEDUP_FP_BITS
+CLI_ARGS += --dedup-fp-bits $(DEDUP_FP_BITS)
+endif
+ifdef DEDUP_FP_BANDS
+CLI_ARGS += --dedup-fp-bands $(DEDUP_FP_BANDS)
+endif
+ifdef DEDUP_FP_HAM
+CLI_ARGS += --dedup-fp-ham $(DEDUP_FP_HAM)
+endif
+ifdef CLUSTER_ALGO
+CLI_ARGS += --cluster-algo $(CLUSTER_ALGO)
+endif
+ifdef CLUSTER_MIN_SIZE
+CLI_ARGS += --cluster-min-size $(CLUSTER_MIN_SIZE)
+endif
+ifdef CLUSTER_K
+CLI_ARGS += --cluster-k $(CLUSTER_K)
+endif
+ifeq ($(ATTACH_NOISE),1)
+CLI_ARGS += --attach-noise
+endif
+ifeq ($(NO_ATTACH_NOISE),1)
+CLI_ARGS += --no-attach-noise
+endif
+ifdef RERANK_STRATEGY
+CLI_ARGS += --rerank-strategy $(RERANK_STRATEGY)
+endif
+ifdef RERANK_LAMBDA
+CLI_ARGS += --rerank-lambda $(RERANK_LAMBDA)
+endif
+ifdef RERANK_MODEL
+CLI_ARGS += --rerank-model $(RERANK_MODEL)
+endif
+ifeq ($(PACK),1)
+CLI_ARGS += --pack
+endif
+ifeq ($(NO_PACK),1)
+CLI_ARGS += --no-pack
+endif
+ifdef PACK_BUDGET
+CLI_ARGS += --pack-budget $(PACK_BUDGET)
+endif
+ifdef PACK_MIN
+CLI_ARGS += --pack-min $(PACK_MIN)
+endif
+ifdef PACK_MAX
+CLI_ARGS += --pack-max $(PACK_MAX)
+endif
+
 
 # 默认显示帮助
 help:

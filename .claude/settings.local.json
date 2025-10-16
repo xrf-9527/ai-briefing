@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git pull:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run view:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(gh run:*)",
+      "Bash(python3:*)",
+      "Bash(make:*)",
+      "Bash(bash --version)",
+      "Bash(./.github/scripts/sync-news.sh:*)",
+      "Read(///**)",
+      "Bash(xxd:*)",
+      "Bash(git submodule:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(gh workflow:*)",
+      "Bash(git fetch:*)",
+      "Bash(git push:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
