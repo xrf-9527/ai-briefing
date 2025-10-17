@@ -1,7 +1,8 @@
 import os
 import json
+import copy
 import datetime as dt
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Set
 
 from briefing.utils import get_logger
 from briefing.llm.registry import call_with_schema
@@ -27,10 +28,14 @@ def generate_summary(bundles: List[Dict[str, Any]],
         logger.info("No bundles to summarize")
         return None, None
     
-    # Load schema
+    # Load base schema
     schema_path = os.path.join(os.path.dirname(__file__), "schemas", "briefing.schema.json")
     with open(schema_path) as f:
-        schema = json.load(f)
+        base_schema = json.load(f)
+
+    # Build allowlists: per-topic and global
+    allowed_by_topic = _collect_allowed_urls_by_topic(bundles)
+    allowed_urls = sorted({u for urls in allowed_by_topic.values() for u in urls})
     
     # Get config
     summ = config.get("summarization", {})
@@ -43,12 +48,19 @@ def generate_summary(bundles: List[Dict[str, Any]],
     else:
         raise ValueError(f"Unknown provider: {provider}")
     
+    # Inject dynamic schema constraints based on provider capabilities
+    if provider == "openai":
+        runtime_schema = _inject_per_topic_url_enums(base_schema, allowed_by_topic)
+    else:
+        # Gemini response_schema likely ignores conditionals; keep global enum only
+        runtime_schema = _inject_global_url_enum(base_schema, allowed_urls)
+    
     # Call LLM with schema
     obj = call_with_schema(
         provider=provider,
         prompt=_mk_prompt(bundles, config),
         model=model,
-        schema=schema,
+        schema=runtime_schema,
         temperature=float(summ.get("temperature", 0.2)),
         timeout=int(summ.get("timeout", 600)),
         retries=int(summ.get("retries", 0)),
@@ -60,6 +72,10 @@ def generate_summary(bundles: List[Dict[str, Any]],
         logger.info("Empty topics")
         return None, None
     
+    # Validate and correct URLs as a final safety net (per-topic)
+    if allowed_urls:
+        obj = _validate_urls(obj, allowed_by_topic, set(allowed_urls))
+
     # Set metadata
     obj["title"] = config.get("briefing_title", obj.get("title", "AI Briefing"))
     obj["date"] = obj.get("date", dt.datetime.now(dt.timezone.utc).isoformat().replace('+00:00', 'Z'))
@@ -72,3 +88,129 @@ def generate_summary(bundles: List[Dict[str, Any]],
     logger.info("Generated %d topics", len(obj["topics"]))
     
     return md, obj
+
+
+def _collect_allowed_urls_by_topic(bundles: List[Dict[str, Any]]) -> Dict[str, List[str]]:
+    """Collect source URLs per topic_id from input bundles."""
+    out: Dict[str, Set[str]] = {}
+    for bundle in bundles or []:
+        tid = str(bundle.get("topic_id") or "").strip() or ""
+        if not tid:
+            continue
+        urls: Set[str] = out.setdefault(tid, set())
+        for item in (bundle.get("items") or []):
+            url = str(item.get("url") or "").strip()
+            if url.startswith(("http://", "https://")):
+                urls.add(url)
+    # sort for determinism
+    return {k: sorted(v) for k, v in out.items()}
+
+
+def _inject_per_topic_url_enums(schema: dict, allowed_by_topic: Dict[str, List[str]]) -> dict:
+    """Inject conditional enums: if topic_id==X then bullets[].url ∈ urls(X).
+
+    Note: Some providers may ignore conditional constructs; post-validation
+    still enforces per-topic constraints.
+    """
+    if not allowed_by_topic:
+        return schema
+
+    s = copy.deepcopy(schema)
+    try:
+        topic_item = s["properties"]["topics"]["items"]
+        all_of = topic_item.setdefault("allOf", [])
+        for topic_id, urls in allowed_by_topic.items():
+            if not urls:
+                continue
+            all_of.append({
+                "if": {
+                    "properties": {
+                        "topic_id": {"const": topic_id}
+                    },
+                    "required": ["topic_id"]
+                },
+                "then": {
+                    "properties": {
+                        "bullets": {
+                            "items": {
+                                "properties": {
+                                    "url": {"enum": urls}
+                                }
+                            }
+                        }
+                    }
+                }
+            })
+        return s
+    except Exception:
+        return schema
+
+
+def _inject_global_url_enum(schema: dict, allowed_urls: List[str]) -> dict:
+    """Inject a global enum for bullets[].url.
+
+    Safer for providers that might not support conditional schemas.
+    """
+    if not allowed_urls:
+        return schema
+    s = copy.deepcopy(schema)
+    try:
+        url_node = (
+            s["properties"]["topics"]["items"]["properties"]["bullets"]["items"]["properties"]["url"]
+        )
+        url_node["enum"] = allowed_urls
+        return s
+    except Exception:
+        return schema
+
+
+def _validate_urls(obj: dict, allowed_by_topic: Dict[str, List[str]], global_allowed: Set[str]) -> dict:
+    """Ensure every bullet.url stays within the per-topic allowlist.
+
+    Attempts safe correction within the topic's allowed set; falls back to
+    global set only for case-insensitive or micro mutations.
+    """
+    if not isinstance(obj, dict) or not global_allowed:
+        return obj
+
+    def _closest(u: str, allowed: Set[str]) -> Optional[str]:
+        if not u:
+            return None
+        if u in allowed:
+            return u
+        low = u.lower()
+        for cand in allowed:
+            if cand.lower() == low:
+                return cand
+        # Try underscore/hyphen swap patterns
+        for candidate in (u.replace("_", "-"), u.replace("-", "_")):
+            if candidate in allowed:
+                return candidate
+            low_c = candidate.lower()
+            for cand in allowed:
+                if cand.lower() == low_c:
+                    return cand
+        # Fuzzy match (strict)
+        try:
+            from difflib import get_close_matches
+            match = get_close_matches(u, list(allowed), n=1, cutoff=0.98)
+            if match:
+                return match[0]
+        except Exception:
+            pass
+        return None
+
+    topics = obj.get("topics") or []
+    for topic in topics:
+        bullets = topic.get("bullets") or []
+        tid = str(topic.get("topic_id") or "").strip()
+        topic_allowed_list = allowed_by_topic.get(tid) or []
+        topic_allowed = set(topic_allowed_list) if topic_allowed_list else global_allowed
+        for bullet in bullets:
+            url = str(bullet.get("url") or "").strip()
+            if url and url not in topic_allowed:
+                fixed = _closest(url, topic_allowed)
+                if fixed and fixed != url:
+                    logger.warning("URL corrected: %s -> %s", url, fixed)
+                    bullet["url"] = fixed
+    return obj

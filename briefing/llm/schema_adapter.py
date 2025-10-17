@@ -31,11 +31,37 @@ def to_gemini(schema: dict) -> dict:
         # Handle array items
         if "items" in node:
             result["items"] = convert(node["items"])
-        
-        # Copy constraints
-        for key in ["required", "minItems", "maxItems", "minLength", "format"]:
+
+        # Copy constraints (extend as needed for compatibility)
+        for key in [
+            "required",
+            "minItems",
+            "maxItems",
+            "minLength",
+            "maxLength",
+            "format",
+            "enum",
+            "const",
+            "pattern",
+        ]:
             if key in node:
                 result[key] = node[key]
+
+        # Logical/conditional keywords (best-effort passthrough)
+        if "allOf" in node and isinstance(node["allOf"], list):
+            result["allOf"] = [convert(x) for x in node["allOf"]]
+        if "anyOf" in node and isinstance(node["anyOf"], list):
+            result["anyOf"] = [convert(x) for x in node["anyOf"]]
+        if "oneOf" in node and isinstance(node["oneOf"], list):
+            result["oneOf"] = [convert(x) for x in node["oneOf"]]
+        if "not" in node and isinstance(node["not"], dict):
+            result["not"] = convert(node["not"])
+        if "if" in node and isinstance(node["if"], dict):
+            result["if"] = convert(node["if"])
+        if "then" in node and isinstance(node["then"], dict):
+            result["then"] = convert(node["then"])
+        if "else" in node and isinstance(node["else"], dict):
+            result["else"] = convert(node["else"])
         
         # Note: additionalProperties not supported in Gemini API
         # Removed to fix compatibility with latest Gemini API

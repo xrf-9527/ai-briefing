@@ -307,6 +307,58 @@ STAGE3_SCHEMA: Dict[str, Any] = {
 }
 
 
+def _inject_url_enum(schema: Dict[str, Any], allowed_urls: list[str]) -> Dict[str, Any]:
+    """Return a copy of schema with bullets/picked url restricted to enum.
+
+    Works for stage2 (picked[].url) and stage3 (bullets[].url). If allowed_urls
+    is empty, returns the original schema.
+    """
+    if not allowed_urls:
+        return schema
+    import copy as _copy
+    s = _copy.deepcopy(schema)
+    # Try stage2 shape first
+    try:
+        node = s["properties"]["picked"]["items"]["properties"]["url"]
+        node["enum"] = allowed_urls
+        return s
+    except Exception:
+        pass
+    # Try stage3 shape
+    try:
+        node = s["properties"]["bullets"]["items"]["properties"]["url"]
+        node["enum"] = allowed_urls
+        return s
+    except Exception:
+        return schema
+
+
+def _closest_url(u: str, allowed: list[str]) -> Optional[str]:
+    if not u or not allowed:
+        return None
+    if u in allowed:
+        return u
+    low = u.lower()
+    for cand in allowed:
+        if cand.lower() == low:
+            return cand
+    for candidate in (u.replace("_", "-"), u.replace("-", "_")):
+        if candidate in allowed:
+            return candidate
+        low_c = candidate.lower()
+        for cand in allowed:
+            if cand.lower() == low_c:
+                return cand
+    try:
+        from difflib import get_close_matches
+        match = get_close_matches(u, allowed, n=1, cutoff=0.98)
+        if match:
+            return match[0]
+    except Exception:
+        pass
+    return None
+
+
 def _render_template(path: Path, **context: Any) -> str:
     with open(path, "r", encoding="utf-8") as handle:
         data = yaml.safe_load(handle) or {}
@@ -460,11 +512,15 @@ def run_stage2_score(
         llm_settings.model,
     )
 
+    # Restrict urls to facts from Stage 1
+    allowed_urls = [str(f.url) for f in cluster_facts.facts]
+    s2_schema = _inject_url_enum(STAGE2_SCHEMA, allowed_urls)
+
     raw = call_with_schema(
         provider=llm_settings.provider,
         prompt=prompt,
         model=llm_settings.model,
-        schema=STAGE2_SCHEMA,
+        schema=s2_schema,
         temperature=llm_settings.temperature,
         timeout=llm_settings.timeout,
         retries=llm_settings.retries,
@@ -479,6 +535,19 @@ def run_stage2_score(
         scores = fact.setdefault("scores", {})
         scores.setdefault("agentic_bonus", 0)
         fact.setdefault("strategic_flag", False)
+
+    # Post-fix picked URLs to canonical ones by fact_id when available
+    # This prevents mutated URLs from slipping through
+    fact_by_id = {f.fact_id: str(f.url) for f in cluster_facts.facts}
+    for picked in raw.get("picked", []) or []:
+        fid = picked.get("fact_id")
+        canonical = fact_by_id.get(fid)
+        if canonical:
+            if picked.get("url") != canonical:
+                logger.warning(
+                    "Stage2: URL corrected by fact_id: %s -> %s", picked.get("url"), canonical
+                )
+                picked["url"] = canonical
 
     cluster_selection = ClusterSelection.model_validate(raw)
 
@@ -532,11 +601,15 @@ def run_stage3_compose(
         llm_settings.model,
     )
 
+    # Restrict bullet URLs to picked fact URLs
+    picked_urls = [str(f.url) for f in cluster_selection.picked]
+    s3_schema = _inject_url_enum(STAGE3_SCHEMA, picked_urls)
+
     raw = call_with_schema(
         provider=llm_settings.provider,
         prompt=prompt,
         model=llm_settings.model,
-        schema=STAGE3_SCHEMA,
+        schema=s3_schema,
         temperature=llm_settings.temperature,
         timeout=llm_settings.timeout,
         retries=llm_settings.retries,
@@ -549,6 +622,23 @@ def run_stage3_compose(
 
     for bullet in raw["bullets"]:
         bullet.setdefault("fact_ids", [])
+
+    # Post-validate bullet URLs against picked facts; align by fact_ids when possible
+    by_id = {f.fact_id: str(f.url) for f in cluster_selection.picked}
+    allowed = [str(f.url) for f in cluster_selection.picked]
+    for bullet in raw.get("bullets", []) or []:
+        # Prefer mapping via fact_ids
+        ids = bullet.get("fact_ids") or []
+        mapped = None
+        for fid in ids:
+            if fid in by_id:
+                mapped = by_id[fid]
+                break
+        current = bullet.get("url")
+        target = mapped or _closest_url(current, allowed)
+        if target and current != target:
+            logger.warning("Stage3: URL corrected: %s -> %s", current, target)
+            bullet["url"] = target
 
     topic_draft = TopicDraft.model_validate(raw)
 
