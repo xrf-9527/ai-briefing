@@ -15,9 +15,8 @@ services:
       CACHE_EXPIRE: 1800        # 30分钟缓存
       CACHE_CONTENT_EXPIRE: 3600 # 1小时内容缓存
       
-      # Twitter 认证 - 关键配置
-      TWITTER_USERNAME: '${TWITTER_USERNAME}' # 使用环境变量
-      TWITTER_PASSWORD: '${TWITTER_PASSWORD}' # 使用环境变量
+      # Twitter 认证 - 使用 Cookie 方式（更稳定，不受 IP 变化影响）
+      TWITTER_AUTH_TOKEN: '${TWITTER_AUTH_TOKEN}'
     depends_on:
       - redis
       - browserless
