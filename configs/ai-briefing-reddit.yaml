@@ -54,7 +54,7 @@ summarization:
       api_version: v1
   openai_model: gpt-4o-mini
   llm_provider: gemini
-  gemini_model: gemini-2.5-flash
+  gemini_model: gemini-3-flash-preview
   target_item_count: 8
 output:
   dir: out/ai-briefing-reddit

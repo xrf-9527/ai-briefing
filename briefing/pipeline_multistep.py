@@ -396,7 +396,7 @@ def _resolve_llm_settings(config: dict, stage_key: str) -> LLMSettings:
     provider = str(_lookup("llm_provider", "gemini")).lower()
 
     if provider == "gemini":
-        model = _lookup("gemini_model", _lookup("model", "gemini-2.0-flash-exp"))
+        model = _lookup("gemini_model", _lookup("model", "gemini-3-flash-preview"))
     elif provider == "openai":
         model = _lookup("openai_model", _lookup("model", "gpt-4o-2024-08-06"))
     else:

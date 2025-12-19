@@ -25,6 +25,7 @@ out/
 /root/.cache/
 models-cache/
 hf_cache/
+tmp/
 *.bin
 *.pt
 

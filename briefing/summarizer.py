@@ -10,6 +10,9 @@ from briefing.rendering.markdown import render_md
 
 logger = get_logger(__name__)
 
+GEMINI_MAX_URL_ENUM_ITEMS = 20
+GEMINI_MAX_URL_ENUM_CHARS = 2000
+
 def _mk_prompt(bundles: List[Dict[str, Any]], cfg: dict) -> str:
     """Render prompt from YAML template."""
     summ = cfg.get("summarization", {})
@@ -42,7 +45,7 @@ def generate_summary(bundles: List[Dict[str, Any]],
     provider = summ.get("llm_provider", "gemini").lower()
     
     if provider == "gemini":
-        model = summ.get("gemini_model", "gemini-2.0-flash-exp")
+        model = summ.get("gemini_model", "gemini-3-flash-preview")
     elif provider == "openai":
         model = summ.get("openai_model", "gpt-4o-2024-08-06")
     else:
@@ -52,8 +55,11 @@ def generate_summary(bundles: List[Dict[str, Any]],
     if provider == "openai":
         runtime_schema = _inject_per_topic_url_enums(base_schema, allowed_by_topic)
     else:
-        # Gemini response_schema likely ignores conditionals; keep global enum only
-        runtime_schema = _inject_global_url_enum(base_schema, allowed_urls)
+        # Gemini may reject large schemas; only inject URL enums when compact.
+        if _should_inject_gemini_url_enum(allowed_urls):
+            runtime_schema = _inject_global_url_enum(base_schema, allowed_urls)
+        else:
+            runtime_schema = base_schema
     
     # Call LLM with schema
     obj = call_with_schema(
@@ -104,6 +110,16 @@ def _collect_allowed_urls_by_topic(bundles: List[Dict[str, Any]]) -> Dict[str, L
                 urls.add(url)
     # sort for determinism
     return {k: sorted(v) for k, v in out.items()}
+
+
+def _should_inject_gemini_url_enum(allowed_urls: List[str]) -> bool:
+    """Avoid oversized enums that Gemini may reject for schema complexity."""
+    if not allowed_urls:
+        return False
+    if len(allowed_urls) > GEMINI_MAX_URL_ENUM_ITEMS:
+        return False
+    total_chars = sum(len(url) for url in allowed_urls)
+    return total_chars <= GEMINI_MAX_URL_ENUM_CHARS
 
 
 def _inject_per_topic_url_enums(schema: dict, allowed_by_topic: Dict[str, List[str]]) -> dict:
