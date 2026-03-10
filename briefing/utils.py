@@ -2,6 +2,7 @@
 import os
 import re
 import json
+import contextvars
 import html2text
 import requests
 import datetime as dt
@@ -13,6 +14,11 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 from email.utils import parsedate_to_datetime
 from typing import Optional, Any
 from pydantic import TypeAdapter, HttpUrl
+
+# ---------- Context vars for structured logging ----------
+
+current_run_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("run_id", default=None)
+current_stage: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("stage", default=None)
 
 # ---------- Time helpers ----------
 
@@ -102,6 +108,38 @@ def normalize_http_url(value: Any) -> Optional[str]:
     except Exception:
         return None
 
+# ---------- URL fuzzy matching ----------
+
+def closest_url(u: str, allowed: list[str]) -> Optional[str]:
+    """Find the closest matching URL from an allowed list.
+
+    Tries exact match, case-insensitive match, underscore/hyphen swap,
+    and finally difflib fuzzy matching with a strict cutoff.
+    """
+    if not u or not allowed:
+        return None
+    if u in allowed:
+        return u
+    low = u.lower()
+    for cand in allowed:
+        if cand.lower() == low:
+            return cand
+    for candidate in (u.replace("_", "-"), u.replace("-", "_")):
+        if candidate in allowed:
+            return candidate
+        low_c = candidate.lower()
+        for cand in allowed:
+            if cand.lower() == low_c:
+                return cand
+    try:
+        from difflib import get_close_matches
+        match = get_close_matches(u, allowed, n=1, cutoff=0.98)
+        if match:
+            return match[0]
+    except Exception:
+        pass
+    return None
+
 # ---------- Config validation ----------
 
 def load_file(path: str) -> str:
@@ -161,11 +199,17 @@ _LOGGER_INITIALIZED = False
 class JsonFormatter(logging.Formatter):
     def format(self, record):
         payload = {
-            "ts": dt.datetime.utcfromtimestamp(record.created).isoformat() + "Z",
+            "ts": dt.datetime.fromtimestamp(record.created, tz=dt.timezone.utc).isoformat().replace("+00:00", "Z"),
             "level": record.levelname,
             "logger": record.name,
             "msg": record.getMessage(),
         }
+        run_id = current_run_id.get(None)
+        if run_id:
+            payload["run_id"] = run_id
+        stage = current_stage.get(None)
+        if stage:
+            payload["stage"] = stage
         if record.exc_info:
             payload["exc_info"] = self.formatException(record.exc_info)
         return json.dumps(payload, ensure_ascii=False)

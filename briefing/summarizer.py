@@ -4,7 +4,7 @@ import copy
 import datetime as dt
 from typing import List, Dict, Any, Optional, Tuple, Set
 
-from briefing.utils import get_logger
+from briefing.utils import get_logger, closest_url
 from briefing.llm.registry import call_with_schema
 from briefing.rendering.markdown import render_md
 
@@ -189,33 +189,6 @@ def _validate_urls(obj: dict, allowed_by_topic: Dict[str, List[str]], global_all
     if not isinstance(obj, dict) or not global_allowed:
         return obj
 
-    def _closest(u: str, allowed: Set[str]) -> Optional[str]:
-        if not u:
-            return None
-        if u in allowed:
-            return u
-        low = u.lower()
-        for cand in allowed:
-            if cand.lower() == low:
-                return cand
-        # Try underscore/hyphen swap patterns
-        for candidate in (u.replace("_", "-"), u.replace("-", "_")):
-            if candidate in allowed:
-                return candidate
-            low_c = candidate.lower()
-            for cand in allowed:
-                if cand.lower() == low_c:
-                    return cand
-        # Fuzzy match (strict)
-        try:
-            from difflib import get_close_matches
-            match = get_close_matches(u, list(allowed), n=1, cutoff=0.98)
-            if match:
-                return match[0]
-        except Exception:
-            pass
-        return None
-
     topics = obj.get("topics") or []
     for topic in topics:
         bullets = topic.get("bullets") or []
@@ -225,7 +198,7 @@ def _validate_urls(obj: dict, allowed_by_topic: Dict[str, List[str]], global_all
         for bullet in bullets:
             url = str(bullet.get("url") or "").strip()
             if url and url not in topic_allowed:
-                fixed = _closest(url, topic_allowed)
+                fixed = closest_url(url, sorted(topic_allowed))
                 if fixed and fixed != url:
                     logger.warning("URL corrected: %s -> %s", url, fixed)
                     bullet["url"] = fixed

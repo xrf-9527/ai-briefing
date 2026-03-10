@@ -42,7 +42,7 @@ def fetch(source_config: Dict[str, Any]) -> List[Dict[str, Any]]:
 
         for p in posts:
             text = clean_text(f"{p.title}\n\n{p.selftext or ''}")
-            created = dt.datetime.utcfromtimestamp(p.created_utc).replace(tzinfo=dt.timezone.utc)
+            created = dt.datetime.fromtimestamp(p.created_utc, tz=dt.timezone.utc)
             items.append({
                 "id": p.id,
                 "text": text,

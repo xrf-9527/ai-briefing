@@ -26,7 +26,7 @@ from briefing.models import (
     Topic,
     TopicDraft,
 )
-from briefing.utils import get_logger, parse_datetime_safe, normalize_http_url
+from briefing.utils import get_logger, parse_datetime_safe, normalize_http_url, closest_url
 from pydantic import ValidationError
 
 logger = get_logger(__name__)
@@ -75,7 +75,12 @@ class PipelineState:
     facts: Dict[str, ClusterFacts]
     selections: Dict[str, ClusterSelection]
     topics: Dict[str, TopicDraft]
+    failures: Dict[str, str] = None  # type: ignore[assignment]
     artifact_root: Optional[Path] = None
+
+    def __post_init__(self):
+        if self.failures is None:
+            self.failures = {}
 
 
 def _get_with_fallback(mapping: Dict[str, Any], key: str) -> Optional[Any]:
@@ -333,30 +338,7 @@ def _inject_url_enum(schema: Dict[str, Any], allowed_urls: list[str]) -> Dict[st
         return schema
 
 
-def _closest_url(u: str, allowed: list[str]) -> Optional[str]:
-    if not u or not allowed:
-        return None
-    if u in allowed:
-        return u
-    low = u.lower()
-    for cand in allowed:
-        if cand.lower() == low:
-            return cand
-    for candidate in (u.replace("_", "-"), u.replace("-", "_")):
-        if candidate in allowed:
-            return candidate
-        low_c = candidate.lower()
-        for cand in allowed:
-            if cand.lower() == low_c:
-                return cand
-    try:
-        from difflib import get_close_matches
-        match = get_close_matches(u, allowed, n=1, cutoff=0.98)
-        if match:
-            return match[0]
-    except Exception:
-        pass
-    return None
+_closest_url = closest_url  # re-export for backward compatibility
 
 
 def _render_template(path: Path, **context: Any) -> str:
@@ -878,6 +860,7 @@ def run_multistage_pipeline(
     facts_map: Dict[str, ClusterFacts] = {}
     selections_map: Dict[str, ClusterSelection] = {}
     topics_map: Dict[str, TopicDraft] = {}
+    failures_map: Dict[str, str] = {}
     ordered_ids: list[str] = []
 
     for raw_bundle in bundles:
@@ -915,6 +898,7 @@ def run_multistage_pipeline(
 
             if not selection.picked:
                 logger.info("Cluster %s skipped after scoring (no high-value facts)", bundle.cluster_id)
+                failures_map[bundle.cluster_id] = "no high-value facts after scoring"
                 continue
 
             topic = run_stage3_compose(
@@ -926,12 +910,31 @@ def run_multistage_pipeline(
 
             if not topic.bullets:
                 logger.info("Cluster %s skipped after composition (empty bullets)", bundle.cluster_id)
+                failures_map[bundle.cluster_id] = "empty bullets after composition"
                 continue
 
             topics_map[bundle.cluster_id] = topic
         except Exception as exc:  # noqa: BLE001
             logger.exception("Cluster %s failed in multi-stage pipeline", bundle.cluster_id)
+            failures_map[bundle.cluster_id] = f"{type(exc).__name__}: {exc}"
             continue
+
+    # Summary log
+    total = len(ordered_ids)
+    succeeded = len(topics_map)
+    failed = total - succeeded
+    if failures_map:
+        from collections import Counter
+        reason_counts = Counter(
+            r.split(":")[0] if ":" in r else r for r in failures_map.values()
+        )
+        reason_summary = ", ".join(f"{cnt} {reason}" for reason, cnt in reason_counts.most_common())
+        logger.info(
+            "pipeline summary: %d/%d clusters succeeded, %d failed (%s)",
+            succeeded, total, failed, reason_summary,
+        )
+    else:
+        logger.info("pipeline summary: %d/%d clusters succeeded", succeeded, total)
 
     ordered_topics = [topics_map[cid] for cid in ordered_ids if cid in topics_map]
 
@@ -950,10 +953,24 @@ def run_multistage_pipeline(
         facts=facts_map,
         selections=selections_map,
         topics=topics_map,
+        failures=failures_map,
         artifact_root=artifact_root,
     )
 
     return briefing, state
+
+
+def _append_metrics_jsonl(metrics: Dict[str, Any]) -> None:
+    """Append metrics to logs/metrics.jsonl for trend analysis."""
+    import os
+    log_dir = os.getenv("LOG_DIR", "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    path = os.path.join(log_dir, "metrics.jsonl")
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(metrics, ensure_ascii=False) + "\n")
+    except Exception as exc:
+        logger.warning("Failed to append metrics to %s: %s", path, exc)
 
 
 def compute_metrics(state: PipelineState, briefing: Briefing, config: Optional[dict] = None) -> Dict[str, Any]:
@@ -983,8 +1000,13 @@ def compute_metrics(state: PipelineState, briefing: Briefing, config: Optional[d
     agentic_topics = sum(1 for topic in state.topics.values() if topic.annotations.get("agentic"))
     strategic_topics = sum(1 for topic in state.topics.values() if topic.annotations.get("strategic"))
 
-    return {
+    from briefing.utils import current_run_id
+
+    metrics = {
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "run_id": current_run_id.get(None),
         "clusters_total": len(state.bundles),
+        "clusters_failed": len(state.failures),
         "topics_final": len(briefing.topics),
         "facts_total": total_facts,
         "facts_picked": picked_facts,
@@ -994,5 +1016,8 @@ def compute_metrics(state: PipelineState, briefing: Briefing, config: Optional[d
         "avg_weighted_score": mean(weighted_totals) if weighted_totals else 0.0,
         "agentic_topics": agentic_topics,
         "strategic_topics": strategic_topics,
-        "json_repair_rate": 0.0,
     }
+
+    _append_metrics_jsonl(metrics)
+
+    return metrics

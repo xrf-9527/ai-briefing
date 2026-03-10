@@ -13,9 +13,9 @@ from briefing.sources import twitter_list_adapter, rss_adapter, reddit_adapter, 
 from briefing.pipeline import run_processing_pipeline
 from briefing.summarizer import generate_summary
 from briefing.pipeline_multistep import compute_metrics, run_multistage_pipeline
-from briefing.publisher import maybe_publish_telegram, maybe_briefing_archive
+from briefing.publisher import maybe_publish_telegram, maybe_briefing_archive, maybe_publish_email
 from briefing.rendering.markdown import render_md
-from briefing.utils import write_output, validate_config, wait_for_service, get_logger, now_utc
+from briefing.utils import write_output, validate_config, wait_for_service, get_logger, now_utc, current_run_id
 from briefing.stages.packer import pack as pack_context
 
 logger = get_logger(__name__)
@@ -134,8 +134,9 @@ def _apply_overrides(cfg: Dict[str, Any], overrides: Optional[Dict[str, Any]]) -
             pk["per_cluster_max"] = int(overrides["packer_max"])  # type: ignore[arg-type]
 
 
-def _execute_pipeline(cfg: Dict[str, Any], run_id: str, overrides: Optional[Dict[str, Optional[bool]]] = None) -> None:
+def _execute_pipeline(cfg: Dict[str, Any], run_id: str, overrides: Optional[Dict[str, Optional[bool]]] = None, *, dry_run: bool = False) -> None:
     """Execute the core briefing pipeline with given configuration."""
+    current_run_id.set(run_id)
     briefing_id = cfg["briefing_id"]
     source_type = cfg["source"]["type"]
     logger.info("config loaded briefing_id=%s title=%s source=%s", briefing_id, cfg["briefing_title"], source_type)
@@ -212,22 +213,31 @@ def _execute_pipeline(cfg: Dict[str, Any], run_id: str, overrides: Optional[Dict
     generated_files = write_output(md, js, cfg["output"])
     logger.info("output written dir=%s", out_dir)
 
-    try:
-        maybe_publish_telegram(md, cfg["output"])
-    except Exception as e:
-        logger.error("telegram publish failed: %s", e)
+    if dry_run:
+        logger.info("dry-run mode: skipping publish steps (telegram, archive)")
+    else:
+        try:
+            maybe_publish_telegram(md, cfg["output"])
+        except Exception as e:
+            logger.error("telegram publish failed: %s", e)
 
-    try:
-        maybe_briefing_archive(generated_files, cfg["output"], briefing_id, run_id)
-    except Exception as e:
-        logger.error("github backup failed: %s", e)
+        try:
+            maybe_publish_email(md, cfg["output"], briefing_title=cfg.get("briefing_title", ""))
+        except Exception as e:
+            logger.error("email publish failed: %s", e)
 
-    logger.info("OK: briefing generated and published.")
+        try:
+            maybe_briefing_archive(generated_files, cfg["output"], briefing_id, run_id)
+        except Exception as e:
+            logger.error("github backup failed: %s", e)
+
+    logger.info("OK: briefing generated%s.", " (dry-run)" if dry_run else " and published")
 
 def main():
     """Main entry point for CLI usage."""
     parser = argparse.ArgumentParser(description="Run a briefing generation task.")
     parser.add_argument('--config', type=str, required=True, help="Path to the briefing config YAML file.")
+    parser.add_argument('--dry-run', dest='dry_run', action='store_true', default=False, help="Generate output files but skip publishing (telegram, archive)")
     parser.add_argument('--multi-stage', dest='multi_stage', action='store_true', help="Enable multi-stage LLM pipeline")
     parser.add_argument('--single-stage', dest='multi_stage', action='store_false', help="Use legacy single-stage summarizer")
     parser.add_argument('--agentic-section', dest='agentic_section', action='store_true', help="Force Agentic Focus section")
@@ -289,8 +299,8 @@ def main():
             "packer_min": args.packer_min,
             "packer_max": args.packer_max,
         }
-        _execute_pipeline(cfg, run_id, overrides)
-        
+        _execute_pipeline(cfg, run_id, overrides, dry_run=args.dry_run)
+
     except Exception as e:
         logger.error("Pipeline execution failed: %s", e)
         raise
@@ -308,12 +318,13 @@ def run_once(
     multi_stage: Optional[bool] = None,
     agentic_section: Optional[bool] = None,
     brief_lite: Optional[bool] = None,
+    dry_run: bool = False,
     overrides: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Execute pipeline once with given config file path."""
     run_id = uuid.uuid4().hex[:8]
     logger.info("=== run start id=%s ===", run_id)
-    
+
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
@@ -325,8 +336,8 @@ def run_once(
         }
         if overrides:
             base_overrides.update({k: v for k, v in overrides.items() if v is not None})
-        _execute_pipeline(cfg, run_id, base_overrides)
-        
+        _execute_pipeline(cfg, run_id, base_overrides, dry_run=dry_run)
+
     except Exception as e:
         logger.error("Pipeline execution failed: %s", e)
         raise

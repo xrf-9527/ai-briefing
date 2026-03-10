@@ -420,10 +420,27 @@ def run_processing_pipeline(raw_items: List[Dict[str, Any]], cfg: Dict[str, Any]
         except Exception as e:
             logger.warning("fingerprint dedup failed, continuing without it: %s", e)
 
-    # lid = fasttext.load_model(LID_MODEL_PATH)
+    # Language detection filter (optional, controlled by processing.language_filter)
+    lang_filter = cfg.get("language_filter")
+    if lang_filter:
+        allowed_langs = set(lang_filter) if isinstance(lang_filter, list) else {lang_filter}
+        try:
+            lid = fasttext.load_model(LID_MODEL_PATH)
+            before_count = len(filtered)
+            kept = []
+            for it in filtered:
+                pred = lid.predict(it["text"].replace("\n", " ")[:1000])
+                lang = pred[0][0].replace("__label__", "") if pred and pred[0] else "unknown"
+                if lang in allowed_langs:
+                    kept.append(it)
+                else:
+                    logger.debug("language filter: dropped item %s (lang=%s)", it.get("id"), lang)
+            filtered = kept
+            logger.info("language filter: kept %d/%d items (allowed=%s)", len(filtered), before_count, allowed_langs)
+        except Exception as e:
+            logger.warning("language detection failed, skipping filter: %s", e)
+
     texts = [it["text"] for it in filtered]
-    # for tx in texts:
-    #     lid.predict(tx.replace("\n", " ")[:1000])  # 标注语言（当前未做强过滤）
 
     embedding_cfg = cfg.get("embedding", {})
     max_batch_tokens = int(embedding_cfg.get("max_batch_tokens", EMBED_MAX_BATCH_TOKENS_DEFAULT))
@@ -495,6 +512,10 @@ def run_processing_pipeline(raw_items: List[Dict[str, Any]], cfg: Dict[str, Any]
         best_idx, best_vec = _cluster_centrality(embs2, idxs)
         query_text = filtered2[best_idx]["text"]
         cand_texts = [filtered2[i]["text"] for i in pick]
+        cand_sources = [
+            (filtered2[i].get("metadata") or {}).get("source", "unknown")
+            for i in pick
+        ]
         if strategy in ("none", "ce", "mmr", "ce+mmr"):
             try:
                 order = rerank_candidates(
@@ -505,6 +526,7 @@ def run_processing_pipeline(raw_items: List[Dict[str, Any]], cfg: Dict[str, Any]
                     cand_embs=embs2[pick],
                     query_vec=best_vec,
                     mmr_lambda=mmr_lambda,
+                    source_labels=cand_sources,
                 )
             except Exception as e:
                 logger.warning("rerank(strategy=%s) failed, falling back to CE: %s", strategy, e)

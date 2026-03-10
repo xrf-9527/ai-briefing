@@ -25,6 +25,8 @@ def _mmr_select(
     query_vec: Optional[np.ndarray] = None,
     lam: float = 0.4,
     topk: Optional[int] = None,
+    source_labels: Optional[List[str]] = None,
+    source_diversity_weight: float = 0.1,
 ) -> List[int]:
     n = cand_embs.shape[0]
     if n == 0:
@@ -54,6 +56,15 @@ def _mmr_select(
             if selected:
                 div = max(sim_mat[i, s] for s in selected)
             score = lam * sim_q[i] - (1.0 - lam) * div
+            # Source diversity penalty: penalize candidates from sources
+            # already over-represented in the selected set
+            if source_labels and source_diversity_weight > 0:
+                src = source_labels[i]
+                if src:
+                    same_source_count = sum(
+                        1 for s in selected if source_labels[s] == src
+                    )
+                    score -= source_diversity_weight * same_source_count
             if score > best_score:
                 best_score = score
                 best_i = i
@@ -71,6 +82,8 @@ def rerank_candidates(
     cand_embs: Optional[np.ndarray] = None,
     query_vec: Optional[np.ndarray] = None,
     mmr_lambda: float = 0.4,
+    source_labels: Optional[List[str]] = None,
+    source_diversity_weight: float = 0.1,
 ) -> List[int]:
     if strategy == "none":
         return list(range(len(candidate_texts)))
@@ -83,7 +96,12 @@ def rerank_candidates(
     if strategy == "mmr":
         if cand_embs is None:
             raise ValueError("MMR requires candidate embeddings")
-        return _mmr_select(cand_embs, query_vec=query_vec, lam=float(mmr_lambda), topk=len(candidate_texts))
+        return _mmr_select(
+            cand_embs, query_vec=query_vec, lam=float(mmr_lambda),
+            topk=len(candidate_texts),
+            source_labels=source_labels,
+            source_diversity_weight=source_diversity_weight,
+        )
 
     if strategy == "ce+mmr":
         if not model_name:
@@ -93,7 +111,13 @@ def rerank_candidates(
             return ce_order
         # re-order using MMR on embeddings in CE-prioritized order
         embs_ordered = cand_embs[ce_order]
-        mmr_order_local = _mmr_select(embs_ordered, query_vec=query_vec, lam=float(mmr_lambda), topk=len(candidate_texts))
+        reordered_labels = [source_labels[i] for i in ce_order] if source_labels else None
+        mmr_order_local = _mmr_select(
+            embs_ordered, query_vec=query_vec, lam=float(mmr_lambda),
+            topk=len(candidate_texts),
+            source_labels=reordered_labels,
+            source_diversity_weight=source_diversity_weight,
+        )
         return [ce_order[i] for i in mmr_order_local]
 
     raise ValueError(f"Unknown rerank strategy: {strategy}")
