@@ -8,6 +8,7 @@ from briefing.orchestrator import run_once
 def main():
     parser = argparse.ArgumentParser(description="AI-Briefing CLI")
     parser.add_argument("--config", required=True, help="Path to YAML config")
+    parser.add_argument("--dry-run", dest="dry_run", action="store_true", default=False, help="Generate output files but skip publishing (telegram, archive)")
     # existing toggles
     parser.add_argument("--multi-stage", dest="multi_stage", action="store_true", help="Enable multi-stage LLM pipeline")
     parser.add_argument("--single-stage", dest="multi_stage", action="store_false", help="Force legacy single-stage summarization")
@@ -69,6 +70,7 @@ def main():
         multi_stage=args.multi_stage,
         agentic_section=args.agentic_section,
         brief_lite=args.brief_lite,
+        dry_run=args.dry_run,
         overrides=overrides,
     )
 

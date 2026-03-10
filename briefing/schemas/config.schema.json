@@ -155,7 +155,8 @@
           "properties": {
             "strategy": { "type": "string", "enum": ["none", "ce", "mmr", "ce+mmr"], "default": "ce" },
             "lambda": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.4 },
-            "model": { "type": "string" }
+            "model": { "type": "string" },
+            "source_diversity_weight": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.1 }
           }
         },
         "packer": {
@@ -190,6 +191,11 @@
           "type": "integer",
           "minimum": 10,
           "default": 300
+        },
+        "language_filter": {
+          "description": "If set, keep only items whose detected language is in this list (e.g. [\"zh\", \"en\"])",
+          "type": "array",
+          "items": { "type": "string", "minLength": 2, "maxLength": 5 }
         },
         "multi_stage": {
           "type": "boolean",
@@ -274,15 +280,20 @@
         "temperature": {
           "type": "number",
           "minimum": 0,
-          "maximum": 2
+          "maximum": 2,
+          "default": 0.2
         },
         "timeout": {
           "type": "integer",
-          "minimum": 1
+          "minimum": 1,
+          "maximum": 1800,
+          "default": 600
         },
         "retries": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "maximum": 10,
+          "default": 2
         },
         "provider_options": {
           "type": "object",
@@ -359,6 +370,25 @@
               "minimum": 0,
               "default": 3
             }
+          }
+        },
+        "email": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "smtp_host": { "type": "string" },
+            "smtp_port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 587 },
+            "smtp_user": { "type": "string" },
+            "smtp_password_env": { "type": "string", "default": "SMTP_PASSWORD", "description": "Environment variable name containing SMTP password" },
+            "from_addr": { "type": "string" },
+            "to_addrs": {
+              "type": "array",
+              "items": { "type": "string", "format": "email" },
+              "minItems": 1
+            },
+            "subject_prefix": { "type": "string", "default": "AI Briefing" },
+            "use_tls": { "type": "boolean", "default": true },
+            "timeout_sec": { "type": "number", "minimum": 1, "default": 30 }
           }
         },
         "briefing_archive": {

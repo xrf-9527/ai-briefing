@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from html import escape as html_escape
 from pathlib import Path
 from typing import Iterable, Optional
@@ -307,6 +307,94 @@ def maybe_briefing_archive(generated_files: Iterable[str], output_cfg: dict, bri
             logger.info("briefing_archive: uploaded %s", path.name)
 
     logger.info("briefing_archive: uploaded %d/%d files", success, len(files))
+
+
+@dataclass
+class EmailConfig:
+    smtp_host: str
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    from_addr: str = ""
+    to_addrs: list[str] = field(default_factory=list)
+    subject_prefix: str = "AI Briefing"
+    use_tls: bool = True
+    timeout_sec: float = 30.0
+
+
+class EmailPublisher:
+    def __init__(self, cfg: EmailConfig):
+        self.cfg = cfg
+
+    def send_markdown(self, markdown_text: str, subject_suffix: str = "") -> None:
+        import smtplib
+        from email.mime.multipart import MIMEMultipart
+        from email.mime.text import MIMEText
+
+        if not (self.cfg.smtp_host and self.cfg.to_addrs):
+            raise RuntimeError("email: smtp_host or to_addrs missing")
+
+        # Convert markdown to HTML for email body
+        import mistune
+        html_body = mistune.html(markdown_text)
+        html_email = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 680px; margin: 0 auto; padding: 20px; line-height: 1.6;">
+{html_body}
+</body></html>"""
+
+        subject = self.cfg.subject_prefix
+        if subject_suffix:
+            subject = f"{subject} — {subject_suffix}"
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = self.cfg.from_addr or self.cfg.smtp_user
+        msg["To"] = ", ".join(self.cfg.to_addrs)
+
+        msg.attach(MIMEText(markdown_text, "plain", "utf-8"))
+        msg.attach(MIMEText(html_email, "html", "utf-8"))
+
+        try:
+            with smtplib.SMTP(self.cfg.smtp_host, self.cfg.smtp_port, timeout=self.cfg.timeout_sec) as server:
+                if self.cfg.use_tls:
+                    server.starttls()
+                if self.cfg.smtp_user and self.cfg.smtp_password:
+                    server.login(self.cfg.smtp_user, self.cfg.smtp_password)
+                server.sendmail(
+                    msg["From"],
+                    self.cfg.to_addrs,
+                    msg.as_string(),
+                )
+            logger.info("email sent to %d recipients", len(self.cfg.to_addrs))
+        except Exception as exc:
+            logger.error("email send failed: %s", exc)
+            raise
+
+
+def maybe_publish_email(markdown_text: str, output_cfg: dict, briefing_title: str = "") -> None:
+    email_cfg = (output_cfg or {}).get("email") or {}
+    if not email_cfg.get("enabled"):
+        return
+
+    password = os.getenv(email_cfg.get("smtp_password_env", "SMTP_PASSWORD"), "")
+    cfg = EmailConfig(
+        smtp_host=email_cfg.get("smtp_host", ""),
+        smtp_port=int(email_cfg.get("smtp_port", 587)),
+        smtp_user=email_cfg.get("smtp_user", ""),
+        smtp_password=password,
+        from_addr=email_cfg.get("from_addr", ""),
+        to_addrs=email_cfg.get("to_addrs", []),
+        subject_prefix=email_cfg.get("subject_prefix", "AI Briefing"),
+        use_tls=bool(email_cfg.get("use_tls", True)),
+        timeout_sec=float(email_cfg.get("timeout_sec", 30.0)),
+    )
+
+    if not (cfg.smtp_host and cfg.to_addrs):
+        logger.warning("email not configured: smtp_host or to_addrs missing")
+        return
+
+    EmailPublisher(cfg).send_markdown(markdown_text, subject_suffix=briefing_title)
 
 
 def _run_safe(cmd_args, cwd=None, env=None):
