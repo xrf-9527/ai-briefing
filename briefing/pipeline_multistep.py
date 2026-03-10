@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -26,7 +27,7 @@ from briefing.models import (
     Topic,
     TopicDraft,
 )
-from briefing.utils import get_logger, parse_datetime_safe, normalize_http_url, closest_url
+from briefing.utils import get_logger, parse_datetime_safe, normalize_http_url, closest_url, current_run_id
 from pydantic import ValidationError
 
 logger = get_logger(__name__)
@@ -75,12 +76,8 @@ class PipelineState:
     facts: Dict[str, ClusterFacts]
     selections: Dict[str, ClusterSelection]
     topics: Dict[str, TopicDraft]
-    failures: Dict[str, str] = None  # type: ignore[assignment]
+    failures: Dict[str, str] = field(default_factory=dict)
     artifact_root: Optional[Path] = None
-
-    def __post_init__(self):
-        if self.failures is None:
-            self.failures = {}
 
 
 def _get_with_fallback(mapping: Dict[str, Any], key: str) -> Optional[Any]:
@@ -338,7 +335,6 @@ def _inject_url_enum(schema: Dict[str, Any], allowed_urls: list[str]) -> Dict[st
         return schema
 
 
-_closest_url = closest_url  # re-export for backward compatibility
 
 
 def _render_template(path: Path, **context: Any) -> str:
@@ -617,7 +613,7 @@ def run_stage3_compose(
                 mapped = by_id[fid]
                 break
         current = bullet.get("url")
-        target = mapped or _closest_url(current, allowed)
+        target = mapped or closest_url(current, allowed)
         if target and current != target:
             logger.warning("Stage3: URL corrected: %s -> %s", current, target)
             bullet["url"] = target
@@ -916,7 +912,7 @@ def run_multistage_pipeline(
             topics_map[bundle.cluster_id] = topic
         except Exception as exc:  # noqa: BLE001
             logger.exception("Cluster %s failed in multi-stage pipeline", bundle.cluster_id)
-            failures_map[bundle.cluster_id] = f"{type(exc).__name__}: {exc}"
+            failures_map[bundle.cluster_id] = f"exception: {type(exc).__name__}"
             continue
 
     # Summary log
@@ -925,9 +921,7 @@ def run_multistage_pipeline(
     failed = total - succeeded
     if failures_map:
         from collections import Counter
-        reason_counts = Counter(
-            r.split(":")[0] if ":" in r else r for r in failures_map.values()
-        )
+        reason_counts = Counter(failures_map.values())
         reason_summary = ", ".join(f"{cnt} {reason}" for reason, cnt in reason_counts.most_common())
         logger.info(
             "pipeline summary: %d/%d clusters succeeded, %d failed (%s)",
@@ -962,7 +956,6 @@ def run_multistage_pipeline(
 
 def _append_metrics_jsonl(metrics: Dict[str, Any]) -> None:
     """Append metrics to logs/metrics.jsonl for trend analysis."""
-    import os
     log_dir = os.getenv("LOG_DIR", "logs")
     os.makedirs(log_dir, exist_ok=True)
     path = os.path.join(log_dir, "metrics.jsonl")
@@ -1000,8 +993,6 @@ def compute_metrics(state: PipelineState, briefing: Briefing, config: Optional[d
     agentic_topics = sum(1 for topic in state.topics.values() if topic.annotations.get("agentic"))
     strategic_topics = sum(1 for topic in state.topics.values() if topic.annotations.get("strategic"))
 
-    from briefing.utils import current_run_id
-
     metrics = {
         "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "run_id": current_run_id.get(None),
@@ -1017,7 +1008,5 @@ def compute_metrics(state: PipelineState, briefing: Briefing, config: Optional[d
         "agentic_topics": agentic_topics,
         "strategic_topics": strategic_topics,
     }
-
-    _append_metrics_jsonl(metrics)
 
     return metrics

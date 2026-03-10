@@ -18,7 +18,6 @@ from pydantic import TypeAdapter, HttpUrl
 # ---------- Context vars for structured logging ----------
 
 current_run_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("run_id", default=None)
-current_stage: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("stage", default=None)
 
 # ---------- Time helpers ----------
 
@@ -207,9 +206,6 @@ class JsonFormatter(logging.Formatter):
         run_id = current_run_id.get(None)
         if run_id:
             payload["run_id"] = run_id
-        stage = current_stage.get(None)
-        if stage:
-            payload["stage"] = stage
         if record.exc_info:
             payload["exc_info"] = self.formatException(record.exc_info)
         return json.dumps(payload, ensure_ascii=False)

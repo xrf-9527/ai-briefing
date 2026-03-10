@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from html import escape as html_escape
 from pathlib import Path
 from typing import Iterable, Optional
@@ -316,14 +316,10 @@ class EmailConfig:
     smtp_user: str = ""
     smtp_password: str = ""
     from_addr: str = ""
-    to_addrs: list[str] = None  # type: ignore[assignment]
+    to_addrs: list[str] = field(default_factory=list)
     subject_prefix: str = "AI Briefing"
     use_tls: bool = True
     timeout_sec: float = 30.0
-
-    def __post_init__(self):
-        if self.to_addrs is None:
-            self.to_addrs = []
 
 
 class EmailPublisher:
@@ -339,7 +335,8 @@ class EmailPublisher:
             raise RuntimeError("email: smtp_host or to_addrs missing")
 
         # Convert markdown to HTML for email body
-        html_body = md_to_tg_html(markdown_text)
+        import mistune
+        html_body = mistune.html(markdown_text)
         html_email = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"></head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 680px; margin: 0 auto; padding: 20px; line-height: 1.6;">
@@ -380,9 +377,7 @@ def maybe_publish_email(markdown_text: str, output_cfg: dict, briefing_title: st
     if not email_cfg.get("enabled"):
         return
 
-    password = email_cfg.get("smtp_password") or os.getenv(
-        email_cfg.get("smtp_password_env", "SMTP_PASSWORD"), ""
-    )
+    password = os.getenv(email_cfg.get("smtp_password_env", "SMTP_PASSWORD"), "")
     cfg = EmailConfig(
         smtp_host=email_cfg.get("smtp_host", ""),
         smtp_port=int(email_cfg.get("smtp_port", 587)),

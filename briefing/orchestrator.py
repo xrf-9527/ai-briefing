@@ -12,7 +12,7 @@ from typing import Dict, Any, List, Optional
 from briefing.sources import twitter_list_adapter, rss_adapter, reddit_adapter, hackernews_adapter
 from briefing.pipeline import run_processing_pipeline
 from briefing.summarizer import generate_summary
-from briefing.pipeline_multistep import compute_metrics, run_multistage_pipeline
+from briefing.pipeline_multistep import compute_metrics, run_multistage_pipeline, _append_metrics_jsonl
 from briefing.publisher import maybe_publish_telegram, maybe_briefing_archive, maybe_publish_email
 from briefing.rendering.markdown import render_md
 from briefing.utils import write_output, validate_config, wait_for_service, get_logger, now_utc, current_run_id
@@ -188,6 +188,7 @@ def _execute_pipeline(cfg: Dict[str, Any], run_id: str, overrides: Optional[Dict
         js = briefing_obj.model_dump(mode="json")
         md = render_md(js, cfg.get("rendering", {}))
         metrics = compute_metrics(state, briefing_obj, cfg)
+        _append_metrics_jsonl(metrics)
         logger.info(
             "multi-stage summarize took_ms=%d metrics=%s",
             int((time.monotonic()-t2) * 1000),
@@ -214,7 +215,7 @@ def _execute_pipeline(cfg: Dict[str, Any], run_id: str, overrides: Optional[Dict
     logger.info("output written dir=%s", out_dir)
 
     if dry_run:
-        logger.info("dry-run mode: skipping publish steps (telegram, archive)")
+        logger.info("dry-run mode: skipping publish steps (telegram, email, archive)")
     else:
         try:
             maybe_publish_telegram(md, cfg["output"])

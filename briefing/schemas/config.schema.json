@@ -155,7 +155,8 @@
           "properties": {
             "strategy": { "type": "string", "enum": ["none", "ce", "mmr", "ce+mmr"], "default": "ce" },
             "lambda": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.4 },
-            "model": { "type": "string" }
+            "model": { "type": "string" },
+            "source_diversity_weight": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.1 }
           }
         },
         "packer": {
@@ -378,8 +379,7 @@
             "smtp_host": { "type": "string" },
             "smtp_port": { "type": "integer", "minimum": 1, "maximum": 65535, "default": 587 },
             "smtp_user": { "type": "string" },
-            "smtp_password": { "type": "string" },
-            "smtp_password_env": { "type": "string", "default": "SMTP_PASSWORD" },
+            "smtp_password_env": { "type": "string", "default": "SMTP_PASSWORD", "description": "Environment variable name containing SMTP password" },
             "from_addr": { "type": "string" },
             "to_addrs": {
               "type": "array",

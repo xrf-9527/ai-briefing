@@ -71,8 +71,8 @@ def fetch(source_config: Dict[str, Any]) -> List[Dict[str, Any]]:
             sid = futures[future]
             try:
                 js = future.result()
-            except Exception:
-                logger.warning("hackernews_adapter: failed to fetch item %s", sid)
+            except Exception as exc:
+                logger.warning("hackernews_adapter: failed to fetch item %s: %s", sid, exc)
                 continue
             parsed = _parse_story(sid, js)
             if parsed:
